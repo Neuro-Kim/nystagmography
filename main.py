@@ -7,9 +7,10 @@ import time
 from collections import deque
 from scipy.signal import find_peaks
 from scipy import signal
+from datetime import datetime
 
 class NystagmusDetector:
-    def __init__(self, history_size=100):
+    def __init__(self, history_size=300, record_duration=10):
         # Initialize MediaPipe Face Mesh
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
@@ -45,27 +46,11 @@ class NystagmusDetector:
         self.start_time = None
         
         # Current camera index
-        self.camera_index = 0
+        self.camera_index = 1
         self.available_cameras = [0, 1, 2, 3]  # Camera indices to cycle through
         
-        # Set up graph
-        self.fig, self.axs = plt.subplots(2, 1, figsize=(10, 8))
-        self.line_left_x, = self.axs[0].plot([], [], 'r-', label='Left Eye X')
-        self.line_right_x, = self.axs[0].plot([], [], 'b-', label='Right Eye X')
-        self.line_left_y, = self.axs[1].plot([], [], 'r-', label='Left Eye Y')
-        self.line_right_y, = self.axs[1].plot([], [], 'b-', label='Right Eye Y')
-        
-        self.axs[0].set_xlabel('Time (seconds)')
-        self.axs[0].set_ylabel('Relative X Position')
-        self.axs[0].set_title('Horizontal Eye Movement')
-        self.axs[0].legend()
-        
-        self.axs[1].set_xlabel('Time (seconds)')
-        self.axs[1].set_ylabel('Relative Y Position')
-        self.axs[1].set_title('Vertical Eye Movement')
-        self.axs[1].legend()
-        
-        self.fig.tight_layout()
+        # Recording settings
+        self.record_duration = record_duration  # Recording duration in seconds
         
     def calculate_relative_position(self, landmark_x, landmark_y, face_width, face_height, face_center_x, face_center_y):
         """Calculate position relative to face center and normalized by face size"""
@@ -164,101 +149,71 @@ class NystagmusDetector:
                             (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 cv2.putText(frame, f"Camera: {self.camera_index}", 
                             (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                
+                # Show remaining recording time
+                elapsed_time = current_time
+                remaining_time = max(0, self.record_duration - elapsed_time)
+                cv2.putText(frame, f"Recording: {remaining_time:.1f}s remaining", 
+                            (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                
                 cv2.putText(frame, "Press 'q' to quit, 'c' to change camera", 
                             (10, h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
         return frame
-    
-    def update_plot(self, frame_idx):
-        # Update graph
-        if len(self.timestamps) > 0:
-            timestamps_array = list(self.timestamps)
-            
-            # Update x-axis data
-            self.line_left_x.set_data(timestamps_array, list(self.left_eye_x_rel))
-            self.line_right_x.set_data(timestamps_array, list(self.right_eye_x_rel))
-            
-            # Update y-axis data
-            self.line_left_y.set_data(timestamps_array, list(self.left_eye_y_rel))
-            self.line_right_y.set_data(timestamps_array, list(self.right_eye_y_rel))
-            
-            # Adjust graph ranges
-            if len(timestamps_array) > 1:
-                for ax in self.axs:
-                    ax.relim()
-                    ax.autoscale_view()
-            
-        return self.line_left_x, self.line_right_x, self.line_left_y, self.line_right_y
     
     def cycle_camera(self):
         """Switch to next available camera"""
         self.camera_index = (self.camera_index + 1) % len(self.available_cameras)
         return self.available_cameras[self.camera_index]
     
-    def start_detection(self, initial_camera=0):
-        self.camera_index = initial_camera
-        cap = cv2.VideoCapture(self.available_cameras[self.camera_index])
+    def create_graph(self):
+        """Create graph of recorded eye movements and save as PNG"""
+        if len(self.timestamps) < 10:
+            print("Not enough data to create graph.")
+            return False
+            
+        fig, axs = plt.subplots(2, 1, figsize=(12, 8))
         
-        if not cap.isOpened():
-            print("Failed to open camera.")
-            return
+        timestamps_array = list(self.timestamps)
         
-        # Create animation
-        ani = FuncAnimation(self.fig, self.update_plot, interval=30, blit=True)
-        plt.ion()  # Interactive mode
+        # Plot X-axis movement
+        axs[0].plot(timestamps_array, list(self.left_eye_x_rel), 'r-', label='Left Eye X')
+        axs[0].plot(timestamps_array, list(self.right_eye_x_rel), 'b-', label='Right Eye X')
+        axs[0].set_xlabel('Time (seconds)')
+        axs[0].set_ylabel('Relative X Position')
+        axs[0].set_title('Horizontal Eye Movement')
+        axs[0].legend()
+        axs[0].grid(True)
+        
+        # Plot Y-axis movement
+        axs[1].plot(timestamps_array, list(self.left_eye_y_rel), 'r-', label='Left Eye Y')
+        axs[1].plot(timestamps_array, list(self.right_eye_y_rel), 'b-', label='Right Eye Y')
+        axs[1].set_xlabel('Time (seconds)')
+        axs[1].set_ylabel('Relative Y Position')
+        axs[1].set_title('Vertical Eye Movement')
+        axs[1].legend()
+        axs[1].grid(True)
+        
+        plt.tight_layout()
+        
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"nystagmus_graph_{timestamp}.png"
+        
+        # Save figure
+        plt.savefig(filename, dpi=300)
+        print(f"Graph saved as {filename}")
+        
+        # Also display the graph
         plt.show()
         
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print(f"Failed to read from camera {self.camera_index}")
-                # Try next camera
-                next_camera = self.cycle_camera()
-                cap.release()
-                cap = cv2.VideoCapture(next_camera)
-                if not cap.isOpened():
-                    print(f"Failed to open camera {next_camera}")
-                    continue
-                
-            processed_frame = self.process_frame(frame)
-            
-            cv2.imshow("Nystagmus Detection", processed_frame)
-            plt.pause(0.001)  # Update graph
-            
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
-            elif key == ord('c'):
-                # Cycle to next camera
-                next_camera = self.cycle_camera()
-                cap.release()
-                cap = cv2.VideoCapture(next_camera)
-                print(f"Switched to camera {next_camera}")
-                if not cap.isOpened():
-                    print(f"Failed to open camera {next_camera}")
-                    # Try to find any working camera
-                    for i in range(len(self.available_cameras)):
-                        test_cam = self.cycle_camera()
-                        cap = cv2.VideoCapture(test_cam)
-                        if cap.isOpened():
-                            print(f"Found working camera {test_cam}")
-                            break
-        
-        cap.release()
-        cv2.destroyAllWindows()
-        plt.close()
-        
+        return True
+    
     def analyze_nystagmus(self):
-        """Nystagmus analysis function
-        
-        This function analyzes collected eye movement data to calculate nystagmus characteristics:
-        - Frequency: The frequency of eye movements (oscillations per second)
-        - Amplitude: The magnitude of eye movements
-        - Direction: Whether primarily horizontal, vertical, or rotational
-        """
+        """Nystagmus analysis function"""
         if len(self.timestamps) < 10:
             print("Not enough data for analysis.")
-            return
+            return False
         
         # Perform FFT for frequency analysis
         # Prepare for data resampling
@@ -273,7 +228,7 @@ class NystagmusDetector:
         x_detrended = signal.detrend(x_resampled)
         
         # Calculate FFT
-        sampling_rate = len(t_resampled) / (t_resampled.max() - t_resampled.min())  # Calculate sampling rate
+        sampling_rate = len(t_resampled) / (t_resampled.max() - t_resampled.min())
         fft_result = np.fft.rfft(x_detrended)
         freqs = np.fft.rfftfreq(len(x_detrended), 1/sampling_rate)
         
@@ -304,36 +259,134 @@ class NystagmusDetector:
             else:
                 print("High-frequency nystagmus: Possibly drug-induced or central nystagmus")
                 
-            # Display additional graphs
-            plt.figure(figsize=(12, 6))
+            # Generate timestamp for filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"nystagmus_analysis_{timestamp}.png"
             
-            plt.subplot(2, 1, 1)
-            plt.plot(t_resampled, x_detrended)
+            # Create detailed analysis figure
+            plt.figure(figsize=(12, 10))
+            
+            plt.subplot(3, 1, 1)
+            plt.plot(t_data, x_data, 'b-', label='Raw data')
+            plt.title('Raw Eye Movement (X-axis)')
+            plt.xlabel('Time (seconds)')
+            plt.ylabel('Position (relative)')
+            plt.legend()
+            plt.grid(True)
+            
+            plt.subplot(3, 1, 2)
+            plt.plot(t_resampled, x_detrended, 'g-', label='Detrended data')
             plt.title('Eye Movement After Detrending')
             plt.xlabel('Time (seconds)')
             plt.ylabel('Position (relative)')
+            plt.legend()
+            plt.grid(True)
             
-            plt.subplot(2, 1, 2)
-            plt.plot(freqs, magnitude)
-            plt.axvline(x=dominant_freq, color='r', linestyle='--', label=f'{dominant_freq:.2f} Hz')
+            plt.subplot(3, 1, 3)
+            plt.plot(freqs, magnitude, 'r-', label='Frequency spectrum')
+            plt.axvline(x=dominant_freq, color='k', linestyle='--', label=f'{dominant_freq:.2f} Hz')
             plt.legend()
             plt.title('Frequency Spectrum')
             plt.xlabel('Frequency (Hz)')
             plt.ylabel('Amplitude')
             plt.xlim(0, 15)  # Display 0-15Hz range
+            plt.grid(True)
             
             plt.tight_layout()
+            
+            # Save analysis figure
+            plt.savefig(filename, dpi=300)
+            print(f"Analysis graph saved as {filename}")
+            
+            # Also display the graph
             plt.show()
+            
+            return True
         else:
             print("No distinct nystagmus pattern detected.")
+            return False
+
+    def start_detection(self, initial_camera=0):
+        self.camera_index = initial_camera
+        cap = cv2.VideoCapture(self.available_cameras[self.camera_index])
+        
+        if not cap.isOpened():
+            print("Failed to open camera.")
+            return
+        
+        self.start_time = time.time()
+        recording_complete = False
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print(f"Failed to read from camera {self.camera_index}")
+                # Try next camera
+                next_camera = self.cycle_camera()
+                cap.release()
+                cap = cv2.VideoCapture(next_camera)
+                if not cap.isOpened():
+                    print(f"Failed to open camera {next_camera}")
+                    continue
+                
+            processed_frame = self.process_frame(frame)
+            
+            # Calculate elapsed time
+            current_time = time.time() - self.start_time
+            
+            # Display current status
+            cv2.imshow("Nystagmus Detection", processed_frame)
+            
+            # Check if recording duration is complete
+            if current_time >= self.record_duration and not recording_complete:
+                print("Recording complete! Generating graphs...")
+                recording_complete = True
+                # Create and save graphs
+                self.create_graph()
+                self.analyze_nystagmus()
+                print("Press 'q' to quit or continue recording...")
+            
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('c'):
+                # Cycle to next camera
+                next_camera = self.cycle_camera()
+                cap.release()
+                cap = cv2.VideoCapture(next_camera)
+                print(f"Switched to camera {next_camera}")
+                
+                # Reset recording
+                self.start_time = time.time()
+                recording_complete = False
+                
+                # Clear previous data
+                self.left_eye_x_rel.clear()
+                self.left_eye_y_rel.clear()
+                self.right_eye_x_rel.clear()
+                self.right_eye_y_rel.clear()
+                self.timestamps.clear()
+                
+                if not cap.isOpened():
+                    print(f"Failed to open camera {next_camera}")
+                    # Try to find any working camera
+                    for i in range(len(self.available_cameras)):
+                        test_cam = self.cycle_camera()
+                        cap = cv2.VideoCapture(test_cam)
+                        if cap.isOpened():
+                            print(f"Found working camera {test_cam}")
+                            break
+        
+        cap.release()
+        cv2.destroyAllWindows()
 
 
 def main():
-    detector = NystagmusDetector(history_size=300)
+    detector = NystagmusDetector(history_size=300, record_duration=10)
     print("Starting nystagmus detection program...")
+    print("Recording for 10 seconds...")
     print("Press 'q' to quit and 'c' to cycle between cameras.")
     detector.start_detection()
-    detector.analyze_nystagmus()
 
 if __name__ == "__main__":
     main()
