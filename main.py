@@ -10,7 +10,7 @@ from scipy import signal
 from datetime import datetime
 
 class NystagmusDetector:
-    def __init__(self, history_size=300, record_duration=10):
+    def __init__(self, history_size=100):
         # Initialize MediaPipe Face Mesh
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
@@ -50,7 +50,7 @@ class NystagmusDetector:
         self.available_cameras = [0, 1, 2, 3]  # Camera indices to cycle through
         
         # Recording settings
-        self.record_duration = record_duration  # Recording duration in seconds
+        self.record_duration = 10  # Recording duration in seconds
         
     def calculate_relative_position(self, landmark_x, landmark_y, face_width, face_height, face_center_x, face_center_y, eye_width, eye_height):
         """Calculate position relative to face center and normalized by eye size"""
@@ -174,20 +174,10 @@ class NystagmusDetector:
                 cv2.putText(frame, f"Eye size: {avg_eye_width:.1f}x{avg_eye_height:.1f} px", 
                             (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 
-                # Show remaining recording time
-                elapsed_time = current_time
-                remaining_time = max(0, self.record_duration - elapsed_time)
-                # Removed the default recording text - this will be handled in the main loop
-                
                 cv2.putText(frame, "Press 'q' to quit, 'c' to change camera, SPACE to start/stop", 
                             (10, h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
         return frame
-    
-    def cycle_camera(self):
-        """Switch to next available camera"""
-        self.camera_index = (self.camera_index + 1) % len(self.available_cameras)
-        return self.available_cameras[self.camera_index]
     
     def create_graph(self):
         """Create graph of recorded eye movements and save as PNG"""
@@ -379,14 +369,6 @@ class NystagmusDetector:
             
             cv2.imshow("Nystagmus Detection", processed_frame)
             
-            # Moving this check outside the recording_active block
-                print("Recording complete! Generating graphs...")
-                recording_complete = True
-                # Create and save graphs
-                self.create_graph()
-                self.analyze_nystagmus()
-                print("Press 'q' to quit or continue recording...")
-            
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
@@ -444,10 +426,15 @@ class NystagmusDetector:
         
         cap.release()
         cv2.destroyAllWindows()
+    
+    def cycle_camera(self):
+        """Switch to next available camera"""
+        self.camera_index = (self.camera_index + 1) % len(self.available_cameras)
+        return self.available_cameras[self.camera_index]
 
 
 def main():
-    detector = NystagmusDetector(history_size=300, record_duration=10)
+    detector = NystagmusDetector(history_size=300)
     print("Starting nystagmus detection program...")
     print("Press SPACE to start recording eye movements for 10 seconds")
     print("Press 'c' to cycle between cameras (1-3)")
