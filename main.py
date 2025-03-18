@@ -46,16 +46,17 @@ class NystagmusDetector:
         self.start_time = None
         
         # Current camera index
-        self.camera_index = 1
+        self.camera_index = 0
         self.available_cameras = [0, 1, 2, 3]  # Camera indices to cycle through
         
         # Recording settings
         self.record_duration = record_duration  # Recording duration in seconds
         
-    def calculate_relative_position(self, landmark_x, landmark_y, face_width, face_height, face_center_x, face_center_y):
-        """Calculate position relative to face center and normalized by face size"""
-        rel_x = (landmark_x - face_center_x) / face_width
-        rel_y = (landmark_y - face_center_y) / face_height
+    def calculate_relative_position(self, landmark_x, landmark_y, face_width, face_height, face_center_x, face_center_y, eye_width, eye_height):
+        """Calculate position relative to face center and normalized by eye size"""
+        # Normalize by eye size instead of face size for more accurate movement tracking
+        rel_x = (landmark_x - face_center_x) / eye_width
+        rel_y = (landmark_y - face_center_y) / eye_height
         return rel_x, rel_y
         
     def process_frame(self, frame):
@@ -101,6 +102,25 @@ class NystagmusDetector:
                 face_width = abs(face_width_points[0].x - face_width_points[1].x) * w
                 face_height = abs(face_height_points[0].y - face_height_points[1].y) * h
                 
+                # Calculate eye dimensions for better normalization
+                # Left eye width
+                left_eye_points = [face_landmarks.landmark[idx] for idx in self.LEFT_EYE_INDICES]
+                left_eye_x_coords = [p.x * w for p in left_eye_points]
+                left_eye_y_coords = [p.y * h for p in left_eye_points]
+                left_eye_width = max(left_eye_x_coords) - min(left_eye_x_coords)
+                left_eye_height = max(left_eye_y_coords) - min(left_eye_y_coords)
+                
+                # Right eye width
+                right_eye_points = [face_landmarks.landmark[idx] for idx in self.RIGHT_EYE_INDICES]
+                right_eye_x_coords = [p.x * w for p in right_eye_points]
+                right_eye_y_coords = [p.y * h for p in right_eye_points]
+                right_eye_width = max(right_eye_x_coords) - min(right_eye_x_coords)
+                right_eye_height = max(right_eye_y_coords) - min(right_eye_y_coords)
+                
+                # Use average eye size for normalization
+                avg_eye_width = (left_eye_width + right_eye_width) / 2
+                avg_eye_height = (left_eye_height + right_eye_height) / 2
+                
                 # Get face center using nose tip
                 nose_tip = face_landmarks.landmark[self.NOSE_TIP]
                 face_center_x = nose_tip.x * w
@@ -116,13 +136,15 @@ class NystagmusDetector:
                 right_iris_x = np.mean([landmark.x for landmark in right_iris_landmarks]) * w
                 right_iris_y = np.mean([landmark.y for landmark in right_iris_landmarks]) * h
                 
-                # Calculate relative positions
+                # Calculate relative positions normalized by eye size
                 left_iris_x_rel, left_iris_y_rel = self.calculate_relative_position(
-                    left_iris_x, left_iris_y, face_width, face_height, face_center_x, face_center_y
+                    left_iris_x, left_iris_y, face_width, face_height, face_center_x, face_center_y,
+                    left_eye_width, left_eye_height
                 )
                 
                 right_iris_x_rel, right_iris_y_rel = self.calculate_relative_position(
-                    right_iris_x, right_iris_y, face_width, face_height, face_center_x, face_center_y
+                    right_iris_x, right_iris_y, face_width, face_height, face_center_x, face_center_y,
+                    right_eye_width, right_eye_height
                 )
                 
                 # Draw circles at iris centers
@@ -149,14 +171,15 @@ class NystagmusDetector:
                             (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 cv2.putText(frame, f"Camera: {self.camera_index}", 
                             (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv2.putText(frame, f"Eye size: {avg_eye_width:.1f}x{avg_eye_height:.1f} px", 
+                            (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 
                 # Show remaining recording time
                 elapsed_time = current_time
                 remaining_time = max(0, self.record_duration - elapsed_time)
-                cv2.putText(frame, f"Recording: {remaining_time:.1f}s remaining", 
-                            (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                # Removed the default recording text - this will be handled in the main loop
                 
-                cv2.putText(frame, "Press 'q' to quit, 'c' to change camera", 
+                cv2.putText(frame, "Press 'q' to quit, 'c' to change camera, SPACE to start/stop", 
                             (10, h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
         return frame
@@ -180,7 +203,7 @@ class NystagmusDetector:
         axs[0].plot(timestamps_array, list(self.left_eye_x_rel), 'r-', label='Left Eye X')
         axs[0].plot(timestamps_array, list(self.right_eye_x_rel), 'b-', label='Right Eye X')
         axs[0].set_xlabel('Time (seconds)')
-        axs[0].set_ylabel('Relative X Position')
+        axs[0].set_ylabel('Relative X Position (normalized by eye width)')
         axs[0].set_title('Horizontal Eye Movement')
         axs[0].legend()
         axs[0].grid(True)
@@ -189,7 +212,7 @@ class NystagmusDetector:
         axs[1].plot(timestamps_array, list(self.left_eye_y_rel), 'r-', label='Left Eye Y')
         axs[1].plot(timestamps_array, list(self.right_eye_y_rel), 'b-', label='Right Eye Y')
         axs[1].set_xlabel('Time (seconds)')
-        axs[1].set_ylabel('Relative Y Position')
+        axs[1].set_ylabel('Relative Y Position (normalized by eye height)')
         axs[1].set_title('Vertical Eye Movement')
         axs[1].legend()
         axs[1].grid(True)
@@ -306,7 +329,7 @@ class NystagmusDetector:
             print("No distinct nystagmus pattern detected.")
             return False
 
-    def start_detection(self, initial_camera=0):
+    def start_detection(self, initial_camera=1):
         self.camera_index = initial_camera
         cap = cv2.VideoCapture(self.available_cameras[self.camera_index])
         
@@ -314,7 +337,7 @@ class NystagmusDetector:
             print("Failed to open camera.")
             return
         
-        self.start_time = time.time()
+        recording_active = False
         recording_complete = False
         
         while True:
@@ -331,14 +354,32 @@ class NystagmusDetector:
                 
             processed_frame = self.process_frame(frame)
             
-            # Calculate elapsed time
-            current_time = time.time() - self.start_time
-            
             # Display current status
+            if recording_active:
+                # Calculate elapsed time when recording
+                current_time = time.time() - self.start_time
+                # Add recording indicator with red background for visibility
+                cv2.rectangle(processed_frame, (5, 150-25), (400, 150+10), (0, 0, 150), -1)
+                cv2.putText(processed_frame, f"RECORDING: {current_time:.1f}s / {self.record_duration}s", 
+                            (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                # Check if recording duration is complete
+                if current_time >= self.record_duration and not recording_complete:
+                    recording_active = False
+                    recording_complete = True
+                    print("Recording complete! Generating graphs...")
+                    # Create and save graphs
+                    self.create_graph()
+                    self.analyze_nystagmus()
+                    print("Press 'q' to quit or Space to start a new recording...")
+            else:
+                # Add green background for visibility
+                cv2.rectangle(processed_frame, (5, 150-25), (350, 150+10), (0, 100, 0), -1)
+                cv2.putText(processed_frame, "Press SPACE to start recording", 
+                            (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
             cv2.imshow("Nystagmus Detection", processed_frame)
             
-            # Check if recording duration is complete
-            if current_time >= self.record_duration and not recording_complete:
+            # Moving this check outside the recording_active block
                 print("Recording complete! Generating graphs...")
                 recording_complete = True
                 # Create and save graphs
@@ -349,6 +390,30 @@ class NystagmusDetector:
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
+            elif key == ord(' '):  # Space key
+                if not recording_active and not recording_complete:
+                    # Start new recording
+                    print("Starting new recording...")
+                    self.start_time = time.time()
+                    recording_active = True
+                    # Clear previous data
+                    self.left_eye_x_rel.clear()
+                    self.left_eye_y_rel.clear()
+                    self.right_eye_x_rel.clear()
+                    self.right_eye_y_rel.clear()
+                    self.timestamps.clear()
+                elif not recording_active and recording_complete:
+                    # Start new recording after completion
+                    print("Starting new recording...")
+                    self.start_time = time.time()
+                    recording_active = True
+                    recording_complete = False
+                    # Clear previous data
+                    self.left_eye_x_rel.clear()
+                    self.left_eye_y_rel.clear()
+                    self.right_eye_x_rel.clear()
+                    self.right_eye_y_rel.clear()
+                    self.timestamps.clear()
             elif key == ord('c'):
                 # Cycle to next camera
                 next_camera = self.cycle_camera()
@@ -356,8 +421,8 @@ class NystagmusDetector:
                 cap = cv2.VideoCapture(next_camera)
                 print(f"Switched to camera {next_camera}")
                 
-                # Reset recording
-                self.start_time = time.time()
+                # Reset recording status
+                recording_active = False
                 recording_complete = False
                 
                 # Clear previous data
@@ -384,9 +449,10 @@ class NystagmusDetector:
 def main():
     detector = NystagmusDetector(history_size=300, record_duration=10)
     print("Starting nystagmus detection program...")
-    print("Recording for 10 seconds...")
-    print("Press 'q' to quit and 'c' to cycle between cameras.")
-    detector.start_detection()
+    print("Press SPACE to start recording eye movements for 10 seconds")
+    print("Press 'c' to cycle between cameras (1-3)")
+    print("Press 'q' to quit")
+    detector.start_detection(initial_camera=1)  # Start with camera 1
 
 if __name__ == "__main__":
     main()
