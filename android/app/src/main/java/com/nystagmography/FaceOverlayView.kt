@@ -51,12 +51,19 @@ class FaceOverlayView @JvmOverloads constructor(
         postInvalidate()
     }
 
+    private fun scaleFactor(): Float =
+        maxOf(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
+
     private fun scaleX(x: Float): Float {
         val sx = if (isMirrored) 1f - x else x
-        return sx * width
+        val s = scaleFactor()
+        return sx * imageWidth * s - (imageWidth * s - width) / 2f
     }
 
-    private fun scaleY(y: Float): Float = y * height
+    private fun scaleY(y: Float): Float {
+        val s = scaleFactor()
+        return y * imageHeight * s - (imageHeight * s - height) / 2f
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)

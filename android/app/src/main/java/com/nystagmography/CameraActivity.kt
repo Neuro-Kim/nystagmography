@@ -186,6 +186,7 @@ class CameraActivity : AppCompatActivity() {
 
     private fun switchCamera() {
         useFrontCamera = !useFrontCamera
+        overlayView.isMirrored = useFrontCamera
         startCamera()
     }
 
@@ -211,7 +212,19 @@ class CameraActivity : AppCompatActivity() {
             }
 
             cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(this, cameraSelector, preview, analysis)
+
+            // Use ViewPort to ensure ImageAnalysis and Preview share the same FOV
+            val viewPort = previewView.viewPort
+            if (viewPort != null) {
+                val useCaseGroup = UseCaseGroup.Builder()
+                    .setViewPort(viewPort)
+                    .addUseCase(preview)
+                    .addUseCase(analysis)
+                    .build()
+                cameraProvider.bindToLifecycle(this, cameraSelector, useCaseGroup)
+            } else {
+                cameraProvider.bindToLifecycle(this, cameraSelector, preview, analysis)
+            }
         }, ContextCompat.getMainExecutor(this))
     }
 
@@ -222,11 +235,21 @@ class CameraActivity : AppCompatActivity() {
         imageProxy.planes[0].buffer.rewind()
         bmp.copyPixelsFromBuffer(imageProxy.planes[0].buffer)
 
+        // Crop to viewport area (matches PreviewView when using UseCaseGroup)
+        val crop = imageProxy.cropRect
+        val cropped = if (crop.left != 0 || crop.top != 0 ||
+            crop.width() != bmp.width || crop.height() != bmp.height
+        ) {
+            Bitmap.createBitmap(bmp, crop.left, crop.top, crop.width(), crop.height())
+        } else {
+            bmp
+        }
+
         val rotation = imageProxy.imageInfo.rotationDegrees.toFloat()
         val rotated = if (rotation != 0f) {
             val matrix = Matrix().apply { postRotate(rotation) }
-            Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
-        } else bmp
+            Bitmap.createBitmap(cropped, 0, 0, cropped.width, cropped.height, matrix, true)
+        } else cropped
 
         val mpImage = BitmapImageBuilder(rotated).build()
         faceLandmarker?.detectAsync(mpImage, SystemClock.uptimeMillis())
