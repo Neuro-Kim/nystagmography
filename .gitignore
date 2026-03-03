@@ -1,0 +1,11 @@
+.DS_Store
+.venv/
+.vscode/
+*.png
+
+# Android
+android/.idea/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

@@ -1,9 +1,12 @@
 import cv2
 import mediapipe as mp
+from mediapipe.tasks.python import vision
+from mediapipe import tasks
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import time
+import os
 from collections import deque
 from scipy.signal import find_peaks
 from scipy import signal
@@ -11,31 +14,33 @@ from datetime import datetime
 
 class NystagmusDetector:
     def __init__(self, history_size=100):
-        # Initialize MediaPipe Face Mesh
-        self.mp_face_mesh = mp.solutions.face_mesh
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+        # Initialize MediaPipe FaceLandmarker (Tasks API)
+        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'face_landmarker.task')
+        base_options = tasks.BaseOptions(model_asset_path=model_path)
+        options = vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.VIDEO,
+            num_faces=1,
+            min_face_detection_confidence=0.5,
+            min_face_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
         )
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_drawing_styles = mp.solutions.drawing_styles
-        
-        # Eye landmark indices (defined in MediaPipe Face Mesh)
+        self.face_landmarker = vision.FaceLandmarker.create_from_options(options)
+        self.frame_timestamp_ms = 0
+
+        # Eye landmark indices
         # Left eye landmarks
         self.LEFT_EYE_INDICES = [362, 385, 387, 263, 373, 380]
         # Right eye landmarks
         self.RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
-        # Left iris landmarks (provided in the 468 landmark model)
-        self.LEFT_IRIS_INDICES = [474, 475, 476, 477]
-        # Right iris landmarks
-        self.RIGHT_IRIS_INDICES = [469, 470, 471, 472]
-        
+        # Iris landmarks (Tasks API: 5 points per eye, index 0 = center)
+        self.LEFT_IRIS_INDICES = [473, 474, 475, 476, 477]
+        self.RIGHT_IRIS_INDICES = [468, 469, 470, 471, 472]
+
         # Face reference points for normalization (nose tip and forehead)
         self.NOSE_TIP = 4
         self.FOREHEAD = 10
-        
+
         # Initialize variables for data recording
         self.history_size = history_size
         self.left_eye_x_rel = deque(maxlen=history_size)
@@ -44,13 +49,11 @@ class NystagmusDetector:
         self.right_eye_y_rel = deque(maxlen=history_size)
         self.timestamps = deque(maxlen=history_size)
         self.start_time = None
-        
+
         # Current camera index
         self.camera_index = 0
         self.available_cameras = [0, 1, 2, 3]  # Camera indices to cycle through
-        
-        # Recording settings
-        self.record_duration = 10  # Recording duration in seconds
+
         
     def calculate_relative_position(self, landmark_x, landmark_y, face_width, face_height, face_center_x, face_center_y, eye_width, eye_height):
         """Calculate position relative to face center and normalized by eye size"""
@@ -62,121 +65,106 @@ class NystagmusDetector:
     def process_frame(self, frame):
         if self.start_time is None:
             self.start_time = time.time()
-            
+
         # Convert color for MediaPipe (BGR -> RGB)
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, _ = frame.shape
-        
-        # Process with Face Mesh
-        results = self.face_mesh.process(frame_rgb)
-        
+
+        # Process with FaceLandmarker (Tasks API)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+        self.frame_timestamp_ms += 33  # ~30fps increment
+        results = self.face_landmarker.detect_for_video(mp_image, self.frame_timestamp_ms)
+
         # Draw and analyze results
-        if results.multi_face_landmarks:
-            for face_landmarks in results.multi_face_landmarks:
-                # Draw face mesh
-                self.mp_drawing.draw_landmarks(
-                    image=frame,
-                    landmark_list=face_landmarks,
-                    connections=self.mp_face_mesh.FACEMESH_TESSELATION,
-                    landmark_drawing_spec=None,
-                    connection_drawing_spec=self.mp_drawing_styles.get_default_face_mesh_tesselation_style()
-                )
-                
-                # Draw iris contours
-                self.mp_drawing.draw_landmarks(
-                    image=frame,
-                    landmark_list=face_landmarks,
-                    connections=self.mp_face_mesh.FACEMESH_IRISES,
-                    landmark_drawing_spec=None,
-                    connection_drawing_spec=self.mp_drawing_styles.get_default_face_mesh_iris_connections_style()
-                )
-                
-                # Calculate face measurements for normalization
-                # Use specific face landmarks to determine face width and height
-                face_width_landmarks = [234, 454]  # Left and right cheek
-                face_height_landmarks = [10, 152]  # Forehead and chin
-                
-                face_width_points = [face_landmarks.landmark[idx] for idx in face_width_landmarks]
-                face_height_points = [face_landmarks.landmark[idx] for idx in face_height_landmarks]
-                
-                face_width = abs(face_width_points[0].x - face_width_points[1].x) * w
-                face_height = abs(face_height_points[0].y - face_height_points[1].y) * h
-                
-                # Calculate eye dimensions for better normalization
-                # Left eye width
-                left_eye_points = [face_landmarks.landmark[idx] for idx in self.LEFT_EYE_INDICES]
-                left_eye_x_coords = [p.x * w for p in left_eye_points]
-                left_eye_y_coords = [p.y * h for p in left_eye_points]
-                left_eye_width = max(left_eye_x_coords) - min(left_eye_x_coords)
-                left_eye_height = max(left_eye_y_coords) - min(left_eye_y_coords)
-                
-                # Right eye width
-                right_eye_points = [face_landmarks.landmark[idx] for idx in self.RIGHT_EYE_INDICES]
-                right_eye_x_coords = [p.x * w for p in right_eye_points]
-                right_eye_y_coords = [p.y * h for p in right_eye_points]
-                right_eye_width = max(right_eye_x_coords) - min(right_eye_x_coords)
-                right_eye_height = max(right_eye_y_coords) - min(right_eye_y_coords)
-                
-                # Use average eye size for normalization
-                avg_eye_width = (left_eye_width + right_eye_width) / 2
-                avg_eye_height = (left_eye_height + right_eye_height) / 2
-                
-                # Get face center using nose tip
-                nose_tip = face_landmarks.landmark[self.NOSE_TIP]
-                face_center_x = nose_tip.x * w
-                face_center_y = nose_tip.y * h
-                
-                # Calculate left iris center
-                left_iris_landmarks = [face_landmarks.landmark[i] for i in self.LEFT_IRIS_INDICES]
-                left_iris_x = np.mean([landmark.x for landmark in left_iris_landmarks]) * w
-                left_iris_y = np.mean([landmark.y for landmark in left_iris_landmarks]) * h
-                
-                # Calculate right iris center
-                right_iris_landmarks = [face_landmarks.landmark[i] for i in self.RIGHT_IRIS_INDICES]
-                right_iris_x = np.mean([landmark.x for landmark in right_iris_landmarks]) * w
-                right_iris_y = np.mean([landmark.y for landmark in right_iris_landmarks]) * h
-                
-                # Calculate relative positions normalized by eye size
-                left_iris_x_rel, left_iris_y_rel = self.calculate_relative_position(
-                    left_iris_x, left_iris_y, face_width, face_height, face_center_x, face_center_y,
-                    left_eye_width, left_eye_height
-                )
-                
-                right_iris_x_rel, right_iris_y_rel = self.calculate_relative_position(
-                    right_iris_x, right_iris_y, face_width, face_height, face_center_x, face_center_y,
-                    right_eye_width, right_eye_height
-                )
-                
-                # Draw circles at iris centers
-                cv2.circle(frame, (int(left_iris_x), int(left_iris_y)), 3, (0, 255, 0), -1)
-                cv2.circle(frame, (int(right_iris_x), int(right_iris_y)), 3, (0, 255, 0), -1)
-                
-                # Draw face center reference
-                cv2.circle(frame, (int(face_center_x), int(face_center_y)), 5, (255, 0, 0), -1)
-                
-                # Record current time
-                current_time = time.time() - self.start_time
-                
-                # Store data
-                self.left_eye_x_rel.append(left_iris_x_rel)
-                self.left_eye_y_rel.append(left_iris_y_rel)
-                self.right_eye_x_rel.append(right_iris_x_rel)
-                self.right_eye_y_rel.append(right_iris_y_rel)
-                self.timestamps.append(current_time)
-                
-                # Display information on screen
-                cv2.putText(frame, f"Left iris rel: ({left_iris_x_rel:.3f}, {left_iris_y_rel:.3f})", 
-                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                cv2.putText(frame, f"Right iris rel: ({right_iris_x_rel:.3f}, {right_iris_y_rel:.3f})", 
-                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                cv2.putText(frame, f"Camera: {self.camera_index}", 
-                            (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                cv2.putText(frame, f"Eye size: {avg_eye_width:.1f}x{avg_eye_height:.1f} px", 
-                            (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                
-                cv2.putText(frame, "Press 'q' to quit, 'c' to change camera, SPACE to start/stop", 
-                            (10, h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
+        if results.face_landmarks:
+            face_landmarks = results.face_landmarks[0]
+
+            # Calculate face measurements for normalization
+            face_width = abs(face_landmarks[234].x - face_landmarks[454].x) * w
+            face_height = abs(face_landmarks[10].y - face_landmarks[152].y) * h
+
+            # Calculate eye dimensions for better normalization
+            left_eye_points = [face_landmarks[idx] for idx in self.LEFT_EYE_INDICES]
+            left_eye_x_coords = [p.x * w for p in left_eye_points]
+            left_eye_y_coords = [p.y * h for p in left_eye_points]
+            left_eye_width = max(left_eye_x_coords) - min(left_eye_x_coords)
+            left_eye_height = max(left_eye_y_coords) - min(left_eye_y_coords)
+
+            right_eye_points = [face_landmarks[idx] for idx in self.RIGHT_EYE_INDICES]
+            right_eye_x_coords = [p.x * w for p in right_eye_points]
+            right_eye_y_coords = [p.y * h for p in right_eye_points]
+            right_eye_width = max(right_eye_x_coords) - min(right_eye_x_coords)
+            right_eye_height = max(right_eye_y_coords) - min(right_eye_y_coords)
+
+            avg_eye_width = (left_eye_width + right_eye_width) / 2
+            avg_eye_height = (left_eye_height + right_eye_height) / 2
+
+            # Get face center using nose tip
+            nose_tip = face_landmarks[self.NOSE_TIP]
+            face_center_x = nose_tip.x * w
+            face_center_y = nose_tip.y * h
+
+            # Iris center (index 0 of each iris group = center point)
+            left_iris_x = face_landmarks[self.LEFT_IRIS_INDICES[0]].x * w
+            left_iris_y = face_landmarks[self.LEFT_IRIS_INDICES[0]].y * h
+
+            right_iris_x = face_landmarks[self.RIGHT_IRIS_INDICES[0]].x * w
+            right_iris_y = face_landmarks[self.RIGHT_IRIS_INDICES[0]].y * h
+
+            # Calculate relative positions normalized by eye size
+            left_iris_x_rel, left_iris_y_rel = self.calculate_relative_position(
+                left_iris_x, left_iris_y, face_width, face_height, face_center_x, face_center_y,
+                left_eye_width, left_eye_height
+            )
+
+            right_iris_x_rel, right_iris_y_rel = self.calculate_relative_position(
+                right_iris_x, right_iris_y, face_width, face_height, face_center_x, face_center_y,
+                right_eye_width, right_eye_height
+            )
+
+            # Draw iris centers
+            cv2.circle(frame, (int(left_iris_x), int(left_iris_y)), 3, (0, 255, 0), -1)
+            cv2.circle(frame, (int(right_iris_x), int(right_iris_y)), 3, (0, 255, 0), -1)
+
+            # Draw iris contour points
+            for idx in self.LEFT_IRIS_INDICES[1:]:
+                pt = face_landmarks[idx]
+                cv2.circle(frame, (int(pt.x * w), int(pt.y * h)), 2, (0, 200, 0), -1)
+            for idx in self.RIGHT_IRIS_INDICES[1:]:
+                pt = face_landmarks[idx]
+                cv2.circle(frame, (int(pt.x * w), int(pt.y * h)), 2, (0, 200, 0), -1)
+
+            # Draw eye contour
+            for indices in [self.LEFT_EYE_INDICES, self.RIGHT_EYE_INDICES]:
+                pts = [(int(face_landmarks[i].x * w), int(face_landmarks[i].y * h)) for i in indices]
+                cv2.polylines(frame, [np.array(pts)], True, (255, 255, 0), 1)
+
+            # Draw face center reference
+            cv2.circle(frame, (int(face_center_x), int(face_center_y)), 5, (255, 0, 0), -1)
+
+            # Record current time
+            current_time = time.time() - self.start_time
+
+            # Store data
+            self.left_eye_x_rel.append(left_iris_x_rel)
+            self.left_eye_y_rel.append(left_iris_y_rel)
+            self.right_eye_x_rel.append(right_iris_x_rel)
+            self.right_eye_y_rel.append(right_iris_y_rel)
+            self.timestamps.append(current_time)
+
+            # Display information on screen
+            cv2.putText(frame, f"Left iris rel: ({left_iris_x_rel:.3f}, {left_iris_y_rel:.3f})",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(frame, f"Right iris rel: ({right_iris_x_rel:.3f}, {right_iris_y_rel:.3f})",
+                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(frame, f"Camera: {self.camera_index}",
+                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(frame, f"Eye size: {avg_eye_width:.1f}x{avg_eye_height:.1f} px",
+                        (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+            cv2.putText(frame, "Press 'q' to quit, 'c' to change camera, SPACE to start/stop",
+                        (10, h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
         return frame
     
     def create_graph(self):
@@ -195,6 +183,7 @@ class NystagmusDetector:
         axs[0].set_xlabel('Time (seconds)')
         axs[0].set_ylabel('Relative X Position (normalized by eye width)')
         axs[0].set_title('Horizontal Eye Movement')
+        axs[0].invert_yaxis()
         axs[0].legend()
         axs[0].grid(True)
         
@@ -272,48 +261,6 @@ class NystagmusDetector:
             else:
                 print("High-frequency nystagmus: Possibly drug-induced or central nystagmus")
                 
-            # Generate timestamp for filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"nystagmus_analysis_{timestamp}.png"
-            
-            # Create detailed analysis figure
-            plt.figure(figsize=(12, 10))
-            
-            plt.subplot(3, 1, 1)
-            plt.plot(t_data, x_data, 'b-', label='Raw data')
-            plt.title('Raw Eye Movement (X-axis)')
-            plt.xlabel('Time (seconds)')
-            plt.ylabel('Position (relative)')
-            plt.legend()
-            plt.grid(True)
-            
-            plt.subplot(3, 1, 2)
-            plt.plot(t_resampled, x_detrended, 'g-', label='Detrended data')
-            plt.title('Eye Movement After Detrending')
-            plt.xlabel('Time (seconds)')
-            plt.ylabel('Position (relative)')
-            plt.legend()
-            plt.grid(True)
-            
-            plt.subplot(3, 1, 3)
-            plt.plot(freqs, magnitude, 'r-', label='Frequency spectrum')
-            plt.axvline(x=dominant_freq, color='k', linestyle='--', label=f'{dominant_freq:.2f} Hz')
-            plt.legend()
-            plt.title('Frequency Spectrum')
-            plt.xlabel('Frequency (Hz)')
-            plt.ylabel('Amplitude')
-            plt.xlim(0, 15)  # Display 0-15Hz range
-            plt.grid(True)
-            
-            plt.tight_layout()
-            
-            # Save analysis figure
-            plt.savefig(filename, dpi=300)
-            print(f"Analysis graph saved as {filename}")
-            
-            # Also display the graph
-            plt.show()
-            
             return True
         else:
             print("No distinct nystagmus pattern detected.")
@@ -328,8 +275,7 @@ class NystagmusDetector:
             return
         
         recording_active = False
-        recording_complete = False
-        
+
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -341,61 +287,43 @@ class NystagmusDetector:
                 if not cap.isOpened():
                     print(f"Failed to open camera {next_camera}")
                     continue
-                
+
             processed_frame = self.process_frame(frame)
-            
+
             # Display current status
             if recording_active:
-                # Calculate elapsed time when recording
                 current_time = time.time() - self.start_time
-                # Add recording indicator with red background for visibility
                 cv2.rectangle(processed_frame, (5, 150-25), (400, 150+10), (0, 0, 150), -1)
-                cv2.putText(processed_frame, f"RECORDING: {current_time:.1f}s / {self.record_duration}s", 
+                cv2.putText(processed_frame, f"RECORDING: {current_time:.1f}s  (SPACE to stop)",
                             (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                # Check if recording duration is complete
-                if current_time >= self.record_duration and not recording_complete:
-                    recording_active = False
-                    recording_complete = True
-                    print("Recording complete! Generating graphs...")
-                    # Create and save graphs
-                    self.create_graph()
-                    self.analyze_nystagmus()
-                    print("Press 'q' to quit or Space to start a new recording...")
             else:
-                # Add green background for visibility
                 cv2.rectangle(processed_frame, (5, 150-25), (350, 150+10), (0, 100, 0), -1)
-                cv2.putText(processed_frame, "Press SPACE to start recording", 
+                cv2.putText(processed_frame, "Press SPACE to start recording",
                             (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
+
             cv2.imshow("Nystagmus Detection", processed_frame)
-            
+
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
             elif key == ord(' '):  # Space key
-                if not recording_active and not recording_complete:
-                    # Start new recording
-                    print("Starting new recording...")
+                if not recording_active:
+                    # Start recording
+                    print("Starting recording...")
                     self.start_time = time.time()
                     recording_active = True
-                    # Clear previous data
                     self.left_eye_x_rel.clear()
                     self.left_eye_y_rel.clear()
                     self.right_eye_x_rel.clear()
                     self.right_eye_y_rel.clear()
                     self.timestamps.clear()
-                elif not recording_active and recording_complete:
-                    # Start new recording after completion
-                    print("Starting new recording...")
-                    self.start_time = time.time()
-                    recording_active = True
-                    recording_complete = False
-                    # Clear previous data
-                    self.left_eye_x_rel.clear()
-                    self.left_eye_y_rel.clear()
-                    self.right_eye_x_rel.clear()
-                    self.right_eye_y_rel.clear()
-                    self.timestamps.clear()
+                else:
+                    # Stop recording
+                    recording_active = False
+                    print("Recording stopped. Generating graphs...")
+                    self.create_graph()
+                    self.analyze_nystagmus()
+                    print("Press SPACE to start a new recording...")
             elif key == ord('c'):
                 # Cycle to next camera
                 next_camera = self.cycle_camera()
@@ -405,7 +333,6 @@ class NystagmusDetector:
                 
                 # Reset recording status
                 recording_active = False
-                recording_complete = False
                 
                 # Clear previous data
                 self.left_eye_x_rel.clear()
@@ -426,6 +353,7 @@ class NystagmusDetector:
         
         cap.release()
         cv2.destroyAllWindows()
+        self.face_landmarker.close()
     
     def cycle_camera(self):
         """Switch to next available camera"""
@@ -439,7 +367,7 @@ def main():
     print("Press SPACE to start recording eye movements for 10 seconds")
     print("Press 'c' to cycle between cameras (1-3)")
     print("Press 'q' to quit")
-    detector.start_detection(initial_camera=1)  # Start with camera 1
+    detector.start_detection(initial_camera=0)  # Start with camera 0
 
 if __name__ == "__main__":
     main()
