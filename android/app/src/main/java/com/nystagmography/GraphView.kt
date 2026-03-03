@@ -18,36 +18,43 @@ class GraphView @JvmOverloads constructor(
 
     private var timestamps = floatArrayOf()
 
+    // iOS-style colors
     private val axisPaint = Paint().apply {
-        color = Color.DKGRAY
-        strokeWidth = 2f
+        color = Color.parseColor("#C7C7CC")
+        strokeWidth = 1f
         style = Paint.Style.STROKE
         isAntiAlias = true
     }
 
     private val textPaint = Paint().apply {
-        color = Color.DKGRAY
-        textSize = 28f
+        color = Color.parseColor("#8E8E93")
+        textSize = 24f
         isAntiAlias = true
     }
 
     private val titlePaint = Paint().apply {
-        color = Color.BLACK
-        textSize = 34f
+        color = Color.parseColor("#1C1C1E")
+        textSize = 32f
         isAntiAlias = true
-        isFakeBoldText = true
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
 
     private val gridPaint = Paint().apply {
-        color = Color.LTGRAY
+        color = Color.parseColor("#E5E5EA")
         strokeWidth = 1f
         style = Paint.Style.STROKE
-        pathEffect = DashPathEffect(floatArrayOf(8f, 4f), 0f)
     }
 
     private val linePaint = Paint().apply {
-        strokeWidth = 3f
+        strokeWidth = 2.5f
         style = Paint.Style.STROKE
+        isAntiAlias = true
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+
+    private val legendDotPaint = Paint().apply {
+        style = Paint.Style.FILL
         isAntiAlias = true
     }
 
@@ -74,10 +81,10 @@ class GraphView @JvmOverloads constructor(
         super.onDraw(canvas)
         if (timestamps.isEmpty() || series.isEmpty()) return
 
-        val padding = 100f
-        val rightPad = 40f
-        val topPad = 70f
-        val bottomPad = 80f
+        val padding = 90f
+        val rightPad = 24f
+        val topPad = 64f
+        val bottomPad = 72f
         val graphLeft = padding
         val graphTop = topPad
         val graphRight = width - rightPad
@@ -86,7 +93,18 @@ class GraphView @JvmOverloads constructor(
         val graphH = graphBottom - graphTop
 
         // Title
-        canvas.drawText(title, graphLeft, topPad - 20f, titlePaint)
+        canvas.drawText(title, graphLeft, topPad - 24f, titlePaint)
+
+        // Legend (next to title)
+        var legendX = graphLeft + titlePaint.measureText(title) + 16f
+        val legendY = topPad - 24f
+        for (s in series) {
+            legendDotPaint.color = s.color
+            canvas.drawCircle(legendX + 5f, legendY - 5f, 5f, legendDotPaint)
+            val labelPaint = Paint(textPaint).apply { textSize = 22f }
+            canvas.drawText(s.label, legendX + 14f, legendY, labelPaint)
+            legendX += 14f + labelPaint.measureText(s.label) + 16f
+        }
 
         // Find data range
         val tMin = timestamps.min()
@@ -105,45 +123,43 @@ class GraphView @JvmOverloads constructor(
         yMax += yPadding
         val tRange = (tMax - tMin).coerceAtLeast(0.001f)
 
-        // Draw axes
-        canvas.drawLine(graphLeft, graphTop, graphLeft, graphBottom, axisPaint)
-        canvas.drawLine(graphLeft, graphBottom, graphRight, graphBottom, axisPaint)
-
-        // Grid lines and labels (5 horizontal, 5 vertical)
+        // Horizontal grid lines
         for (i in 0..4) {
             val y = graphTop + graphH * i / 4f
             canvas.drawLine(graphLeft, y, graphRight, y, gridPaint)
-            val label = "%.2f".format(if (invertY) yMin + (yMax - yMin) * i / 4f else yMax - (yMax - yMin) * i / 4f)
-            canvas.drawText(label, 5f, y + 10f, textPaint)
+            val label = "%.2f".format(
+                if (invertY) yMin + (yMax - yMin) * i / 4f
+                else yMax - (yMax - yMin) * i / 4f
+            )
+            canvas.drawText(label, 4f, y + 8f, textPaint)
         }
+
+        // Vertical grid lines + time labels
         for (i in 0..4) {
             val x = graphLeft + graphW * i / 4f
             canvas.drawLine(x, graphTop, x, graphBottom, gridPaint)
             val label = "%.1fs".format(tMin + tRange * i / 4f)
-            canvas.drawText(label, x - 20f, graphBottom + 40f, textPaint)
+            canvas.drawText(label, x - 18f, graphBottom + 36f, textPaint)
         }
 
-        // Draw series
+        // Bottom axis line
+        canvas.drawLine(graphLeft, graphBottom, graphRight, graphBottom, axisPaint)
+
+        // Draw series with smooth paths
         for (s in series) {
             linePaint.color = s.color
             val path = Path()
             val n = minOf(timestamps.size, s.data.size)
             for (i in 0 until n) {
                 val x = graphLeft + (timestamps[i] - tMin) / tRange * graphW
-                val y = if (invertY) graphTop + (s.data[i] - yMin) / (yMax - yMin) * graphH else graphBottom - (s.data[i] - yMin) / (yMax - yMin) * graphH
+                val y = if (invertY) {
+                    graphTop + (s.data[i] - yMin) / (yMax - yMin) * graphH
+                } else {
+                    graphBottom - (s.data[i] - yMin) / (yMax - yMin) * graphH
+                }
                 if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
             }
             canvas.drawPath(path, linePaint)
-        }
-
-        // Legend
-        var legendX = graphLeft + 10f
-        val legendY = graphTop + 30f
-        for (s in series) {
-            linePaint.color = s.color
-            canvas.drawLine(legendX, legendY, legendX + 30f, legendY, linePaint)
-            canvas.drawText(s.label, legendX + 35f, legendY + 8f, textPaint)
-            legendX += 35f + textPaint.measureText(s.label) + 20f
         }
     }
 }

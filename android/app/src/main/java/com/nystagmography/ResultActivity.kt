@@ -61,6 +61,7 @@ class ResultActivity : AppCompatActivity() {
         tvAnalysis.text = analyzeNystagmus(d)
 
         findViewById<Button>(R.id.btnSavePng).setOnClickListener { saveGraphsAsPng() }
+        findViewById<Button>(R.id.btnBack).setOnClickListener { finish() }
     }
 
     private fun saveGraphsAsPng() {

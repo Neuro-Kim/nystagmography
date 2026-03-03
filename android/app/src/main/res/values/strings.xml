@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Nystagmography</string>
-    <string name="icon_switch_camera">🔄</string>
+    <string name="switch_camera">Switch camera</string>
 </resources>

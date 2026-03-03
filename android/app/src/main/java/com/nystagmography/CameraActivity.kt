@@ -7,7 +7,9 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.View
 import android.widget.Button
+import android.widget.ImageButton
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -27,7 +29,7 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var overlayView: FaceOverlayView
     private lateinit var btnRecord: Button
-    private lateinit var btnSwitchCamera: Button
+    private lateinit var btnSwitchCamera: ImageButton
     private lateinit var tvStatus: TextView
 
     private val cameraExecutor = Executors.newSingleThreadExecutor()
@@ -163,11 +165,14 @@ class CameraActivity : AppCompatActivity() {
                 timestampList.clear()
             }
             btnRecord.text = "Stop"
+            btnRecord.setBackgroundResource(R.drawable.bg_pill_button_destructive)
+            tvStatus.visibility = View.VISIBLE
             tvStatus.text = "Recording: 0.0s"
         } else {
             isRecording = false
             btnRecord.text = "Record"
-            tvStatus.text = "Ready"
+            btnRecord.setBackgroundResource(R.drawable.bg_pill_button)
+            tvStatus.visibility = View.GONE
 
             synchronized(this) {
                 if (timestampList.size >= 10) {
@@ -178,6 +183,7 @@ class CameraActivity : AppCompatActivity() {
                     NystagmusData.timestamps = timestampList.toFloatArray()
                     startActivity(Intent(this@CameraActivity, ResultActivity::class.java))
                 } else {
+                    tvStatus.visibility = View.VISIBLE
                     tvStatus.text = "Not enough data. Try again."
                 }
             }

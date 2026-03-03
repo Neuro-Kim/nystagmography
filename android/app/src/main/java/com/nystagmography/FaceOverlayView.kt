@@ -16,18 +16,18 @@ class FaceOverlayView @JvmOverloads constructor(
     var isMirrored = true
 
     private val irisPaint = Paint().apply {
-        color = Color.GREEN
+        color = Color.parseColor("#30D158")  // iOS green
         style = Paint.Style.FILL
     }
 
     private val eyeContourPaint = Paint().apply {
-        color = Color.YELLOW
+        color = Color.parseColor("#FFD60A")  // iOS yellow
         style = Paint.Style.STROKE
         strokeWidth = 2f
     }
 
     private val nosePaint = Paint().apply {
-        color = Color.RED
+        color = Color.parseColor("#FF453A")  // iOS red
         style = Paint.Style.FILL
     }
 
