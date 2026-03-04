@@ -13,8 +13,10 @@ class GraphView @JvmOverloads constructor(
     private var yLabel = ""
     private var invertY = false
     private val series = mutableListOf<Series>()
+    private var markers = listOf<Marker>()
 
     data class Series(val data: FloatArray, val color: Int, val label: String)
+    data class Marker(val time: Float, val color: Int)
 
     private var timestamps = floatArrayOf()
 
@@ -74,6 +76,11 @@ class GraphView @JvmOverloads constructor(
 
     fun setInvertY(invert: Boolean) {
         this.invertY = invert
+        invalidate()
+    }
+
+    fun setMarkers(markers: List<Marker>) {
+        this.markers = markers
         invalidate()
     }
 
@@ -144,6 +151,23 @@ class GraphView @JvmOverloads constructor(
 
         // Bottom axis line
         canvas.drawLine(graphLeft, graphBottom, graphRight, graphBottom, axisPaint)
+
+        // Draw beat markers as vertical dashed lines
+        if (markers.isNotEmpty()) {
+            val markerPaint = Paint().apply {
+                strokeWidth = 1.5f
+                style = Paint.Style.STROKE
+                isAntiAlias = true
+                pathEffect = DashPathEffect(floatArrayOf(8f, 6f), 0f)
+            }
+            for (m in markers) {
+                val x = graphLeft + (m.time - tMin) / tRange * graphW
+                if (x in graphLeft..graphRight) {
+                    markerPaint.color = m.color
+                    canvas.drawLine(x, graphTop, x, graphBottom, markerPaint)
+                }
+            }
+        }
 
         // Draw series with smooth paths
         for (s in series) {

@@ -17,12 +17,12 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.*
 
 class ResultActivity : AppCompatActivity() {
 
     private lateinit var graphHorizontal: GraphView
     private lateinit var graphVertical: GraphView
+    private lateinit var graphSPV: GraphView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,6 +30,7 @@ class ResultActivity : AppCompatActivity() {
 
         graphHorizontal = findViewById(R.id.graphHorizontal)
         graphVertical = findViewById(R.id.graphVertical)
+        graphSPV = findViewById(R.id.graphSPV)
         val tvAnalysis = findViewById<TextView>(R.id.tvAnalysis)
 
         val d = NystagmusData
@@ -57,23 +58,77 @@ class ResultActivity : AppCompatActivity() {
             GraphView.Series(d.rightEyeYRel, Color.BLUE, "Right Eye Y")
         )
 
-        // Basic analysis
-        tvAnalysis.text = analyzeNystagmus(d)
+        // Run SPV analysis
+        val result = NystagmusAnalyzer.analyze(d.leftEyeXRel, d.timestamps)
+
+        // Beat markers on horizontal graph (orange dashed lines at beat start times)
+        val markerColor = Color.parseColor("#FF9500")
+        val markers = result.beats.map { GraphView.Marker(it.startTime, markerColor) }
+        graphHorizontal.setMarkers(markers)
+
+        // SPV graph: plot each beat's SPV as a step over its time span
+        if (result.beats.isNotEmpty()) {
+            val spvTimestamps = mutableListOf<Float>()
+            val spvValues = mutableListOf<Float>()
+            for (beat in result.beats) {
+                spvTimestamps.add(beat.startTime)
+                spvValues.add(beat.spv)
+                spvTimestamps.add(beat.endTime)
+                spvValues.add(beat.spv)
+            }
+            graphSPV.setData(
+                "Slow Phase Velocity (SPV)",
+                "SPV (normalized/s)",
+                spvTimestamps.toFloatArray(),
+                GraphView.Series(spvValues.toFloatArray(), Color.parseColor("#FF9500"), "SPV")
+            )
+        }
+
+        // Analysis text
+        tvAnalysis.text = formatResults(result)
 
         findViewById<Button>(R.id.btnSavePng).setOnClickListener { saveGraphsAsPng() }
         findViewById<Button>(R.id.btnBack).setOnClickListener { finish() }
+    }
+
+    private fun formatResults(r: NystagmusAnalyzer.AnalysisResult): String {
+        val sb = StringBuilder()
+        sb.appendLine("=== Nystagmus Analysis ===")
+        sb.appendLine("Duration: %.1f s".format(r.duration))
+        sb.appendLine("Samples: ${r.sampleCount}")
+        sb.appendLine("Dominant Frequency: %.2f Hz".format(r.dominantFrequency))
+        sb.appendLine("Average Amplitude: %.4f".format(r.amplitude))
+        sb.appendLine()
+        sb.appendLine("=== Beat Detection ===")
+        sb.appendLine("Beats detected: ${r.beatCount}")
+        sb.appendLine("Beat frequency: %.2f /s".format(r.beatFrequency))
+        sb.appendLine("Mean SPV: %.4f /s".format(r.meanSPV))
+        sb.appendLine("Direction: ${r.direction}")
+        sb.appendLine()
+
+        when {
+            r.dominantFrequency < 2f ->
+                sb.appendLine("Low-frequency: possibly vestibular nystagmus")
+            r.dominantFrequency <= 5f ->
+                sb.appendLine("Mid-frequency: possibly congenital nystagmus")
+            else ->
+                sb.appendLine("High-frequency: possibly drug-induced or central nystagmus")
+        }
+
+        return sb.toString()
     }
 
     private fun saveGraphsAsPng() {
         val w = graphHorizontal.width
         val h1 = graphHorizontal.height
         val h2 = graphVertical.height
-        if (w == 0 || h1 == 0 || h2 == 0) {
+        val h3 = graphSPV.height
+        if (w == 0 || h1 == 0 || h2 == 0 || h3 == 0) {
             Toast.makeText(this, "Graph not ready", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val combined = Bitmap.createBitmap(w, h1 + h2, Bitmap.Config.ARGB_8888)
+        val combined = Bitmap.createBitmap(w, h1 + h2 + h3, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(combined)
         canvas.drawColor(Color.WHITE)
 
@@ -86,6 +141,11 @@ class ResultActivity : AppCompatActivity() {
         graphVertical.draw(Canvas(b2))
         canvas.drawBitmap(b2, 0f, h1.toFloat(), null)
         b2.recycle()
+
+        val b3 = Bitmap.createBitmap(w, h3, Bitmap.Config.ARGB_8888)
+        graphSPV.draw(Canvas(b3))
+        canvas.drawBitmap(b3, 0f, (h1 + h2).toFloat(), null)
+        b3.recycle()
 
         val filename = "nystagmus_graph_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.png"
 
@@ -115,54 +175,5 @@ class ResultActivity : AppCompatActivity() {
         }
 
         combined.recycle()
-    }
-
-    private fun analyzeNystagmus(d: NystagmusData): String {
-        val data = d.leftEyeXRel
-        if (data.size < 10) return "Not enough data for analysis."
-
-        // Detrend: remove linear trend
-        val n = data.size
-        val t = d.timestamps
-        val meanT = t.average().toFloat()
-        val meanX = data.average().toFloat()
-        var num = 0f
-        var den = 0f
-        for (i in 0 until n) {
-            num += (t[i] - meanT) * (data[i] - meanX)
-            den += (t[i] - meanT) * (t[i] - meanT)
-        }
-        val slope = if (den > 0) num / den else 0f
-        val detrended = FloatArray(n) { data[it] - (slope * (t[it] - meanT) + meanX) }
-
-        // Amplitude (standard deviation)
-        val amplitude = sqrt(detrended.map { it * it }.average()).toFloat()
-
-        // Estimate frequency via zero crossings
-        var crossings = 0
-        for (i in 1 until n) {
-            if (detrended[i - 1] * detrended[i] < 0) crossings++
-        }
-        val duration = t.last() - t.first()
-        val freqEstimate = if (duration > 0) crossings / (2f * duration) else 0f
-
-        val sb = StringBuilder()
-        sb.appendLine("=== Nystagmus Analysis ===")
-        sb.appendLine("Duration: %.1f s".format(duration))
-        sb.appendLine("Samples: $n")
-        sb.appendLine("Dominant Frequency: %.2f Hz".format(freqEstimate))
-        sb.appendLine("Average Amplitude: %.4f".format(amplitude))
-        sb.appendLine()
-
-        when {
-            freqEstimate < 2f ->
-                sb.appendLine("Low-frequency: possibly vestibular nystagmus")
-            freqEstimate <= 5f ->
-                sb.appendLine("Mid-frequency: possibly congenital nystagmus")
-            else ->
-                sb.appendLine("High-frequency: possibly drug-induced or central nystagmus")
-        }
-
-        return sb.toString()
     }
 }
